@@ -7,10 +7,252 @@
 #include <math.h>
 #include <boost/thread.hpp>
 
+template < typename T >
+T sigmoid1(T x)
+{
+    return 1.0f / (1.0f + exp(-x));
+}
+
+template < typename T >
+T dsigmoid1(T x)
+{
+    return (1.0f - x)*x;
+}
+
+template < typename T >
+T sigmoid2(T x)
+{
+    return log(1+exp(0.25*x));
+}
+
+template < typename T >
+T dsigmoid2(T x)
+{
+    return 0.25/(1+exp(-0.25*x));
+}
+
+template < typename T >
+T sigmoid(T x,int type)
+{
+    switch(type)
+    {
+        case 0:
+            return sigmoid1(x);
+        case 1:
+            return sigmoid1(x);
+    }
+}
+
+template < typename T >
+T dsigmoid(T x,int type)
+{
+    switch(type)
+    {
+        case 0:
+            return dsigmoid1(x);
+        case 1:
+            return dsigmoid1(x);
+    }
+}
+
+template<typename T>
+struct training_info
+{
+    std::vector<long> n_nodes;
+    T **  activation_values;
+    T **  deltas;
+    long n_variables;
+    long n_labels;
+    long n_layers;
+    long n_elements;
+
+    T *** weights_neuron;
+    T **  weights_bias;
+    T *** partial_weights_neuron;
+    T **  partial_weights_bias;
+
+    T partial_error;
+
+    T epsilon;
+
+    int type;
+
+    training_info()
+    {
+
+    }
+
+    void init()
+    {
+        type = 0;
+        partial_error = 0;
+        activation_values  = new T*[n_nodes.size()];
+        for(long layer = 0;layer < n_nodes.size();layer++)
+        {
+            activation_values [layer] = new T[n_nodes[layer]];
+        }
+        deltas = new T*[n_nodes.size()];
+        for(long layer = 0;layer < n_nodes.size();layer++)
+        {
+            deltas[layer] = new T[n_nodes[layer]];
+        }
+        partial_weights_neuron = new T**[n_layers];
+        partial_weights_bias = new T*[n_layers];
+        for(long layer = 0;layer < n_layers;layer++)
+        {
+            partial_weights_neuron[layer] = new T*[n_nodes[layer+1]];
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                partial_weights_neuron[layer][i] = new T[n_nodes[layer]];
+                for(long j=0;j<n_nodes[layer];j++)
+                {
+                    partial_weights_neuron[layer][i][j] = 0;
+                }
+            }
+            partial_weights_bias[layer] = new T[n_nodes[layer+1]];
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                partial_weights_bias[layer][i] = 0;
+            }
+        }
+    }
+
+    void destroy()
+    {
+        for(long layer = 0;layer < n_nodes.size();layer++)
+        {
+            delete [] activation_values [layer];
+        }
+        delete [] activation_values;
+        for(long layer = 0;layer < n_nodes.size();layer++)
+        {
+            delete [] deltas [layer];
+        }
+        delete [] deltas;
+        for(long layer = 0;layer < n_layers;layer++)
+        {
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                delete [] partial_weights_neuron[layer][i];
+            }
+            delete [] partial_weights_neuron[layer];
+        }
+        delete [] partial_weights_neuron;
+        for(long layer = 0;layer < n_layers;layer++)
+        {
+            delete [] partial_weights_bias[layer];
+        }
+        delete [] partial_weights_bias;
+    }
+
+    void globalUpdate()
+    {
+        for(long layer = 0;layer < n_layers;layer++)
+        {
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                for(long j=0;j<n_nodes[layer];j++)
+                {
+                    weights_neuron[layer][i][j] += partial_weights_neuron[layer][i][j] / n_elements;
+                }
+            }
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                weights_bias[layer][i] += partial_weights_bias[layer][i] / n_elements;
+            }
+        }
+    }
+};
+
+template<typename T>
+void training_worker(training_info<T> * g,std::vector<long> const & vrtx,T * variables,T * labels)
+{
+    
+    for(long n=0;n<vrtx.size();n++)
+    {
+
+        // initialize input activations
+        for(long i=0;i<g->n_nodes[0];i++)
+        {
+            g->activation_values[0][i] = variables[vrtx[n]*g->n_variables+i];
+        }
+        // forward propagation
+        for(long layer = 0; layer < g->n_layers; layer++)
+        {
+            for(long i=0;i<g->n_nodes[layer+1];i++)
+            {
+                T sum = g->weights_bias[layer][i];
+                for(long j=0;j<g->n_nodes[layer];j++)
+                {
+                    sum += g->activation_values[layer][j] * g->weights_neuron[layer][i][j];
+                }
+                g->activation_values[layer+1][i] = sigmoid(sum,g->type);
+                //std::cout << g->activation_values[layer+1][i] << '\t';
+            }
+            //std::cout << std::endl;
+        }
+        long last_layer = g->n_nodes.size()-2;
+        // initialize observed labels
+        for(long i=0;i<g->n_nodes[last_layer];i++)
+        {
+            g->deltas[last_layer+1][i] = labels[vrtx[n]*g->n_labels+i] - g->activation_values[last_layer][i];
+            g->partial_error += fabs(g->deltas[last_layer+1][i]);
+            //std::cout << g->deltas[last_layer+1][i] << '\t';
+        }
+        //std::cout << std::endl;
+        // back propagation
+        for(long layer = g->n_layers-1; layer >= 0; layer--)
+        {
+            // back propagate deltas
+            for(long i=0;i<g->n_nodes[layer+1];i++)
+            {
+                g->deltas[layer+1][i] = 0;
+                for(long j=0;j<g->n_nodes[layer+2];j++)
+                {
+                    if(layer+1==last_layer)
+                    {
+                        g->deltas[layer+1][i] += dsigmoid(g->activation_values[layer+1][i],g->type)*g->deltas[layer+2][j];
+                    }
+                    else
+                    {
+                        g->deltas[layer+1][i] += dsigmoid(g->activation_values[layer+1][i],g->type)*g->deltas[layer+2][j]*g->weights_neuron[layer+1][j][i];
+                    }
+                }
+                //std::cout << g->deltas[layer+1][i] << '\t';
+            }
+            //std::cout << std::endl;
+            //std::cout << "biases" << std::endl;
+            // biases
+            for(long i=0;i<g->n_nodes[layer+1];i++)
+            {
+                g->partial_weights_bias[layer][i] += g->epsilon * g->deltas[layer+1][i];
+                //std::cout << g->partial_weights_bias[layer][i] << '\t';
+            }
+            //std::cout << std::endl;
+            //std::cout << "neuron weights" << std::endl;
+            // neuron weights
+            for(long i=0;i<g->n_nodes[layer+1];i++)
+            {
+                for(long j=0;j<g->n_nodes[layer];j++)
+                {
+                    g->partial_weights_neuron[layer][i][j] += g->epsilon * g->activation_values[layer][j] * g->deltas[layer+1][i];
+                    //std::cout << g->partial_weights_neuron[layer][i][j] << '\t';
+                }
+                //std::cout << std::endl;
+            }
+            //std::cout << std::endl;
+        }
+        //char ch;
+        //std::cin >> ch;
+    }
+
+}
+
 template<typename T>
 struct Perceptron
 {
 
+    T ierror;
     T perror;
 
     T *** weights_neuron;
@@ -18,12 +260,14 @@ struct Perceptron
     T **  activation_values;
     T **  activation_values1;
     T **  deltas;
-    long * number_of_nodes;
 
     long n_inputs;
     long n_outputs;
     long n_layers;
     std::vector<long> n_nodes;
+
+    T epsilon;
+    int sigmoid_type;
 
     // std::vector<long> nodes;
     // nodes.push_back(2); // inputs
@@ -33,6 +277,9 @@ struct Perceptron
     Perceptron(std::vector<long> p_nodes)
     {
 
+        sigmoid_type = 0;
+
+        ierror = 1e10;
         perror = 1e10;
 
         n_nodes = p_nodes;
@@ -42,7 +289,6 @@ struct Perceptron
 
         weights_neuron = new T**[n_layers];
         weights_bias = new T*[n_layers];
-        number_of_nodes  = new long[n_layers];
         activation_values  = new T*[n_nodes.size()];
         activation_values1 = new T*[n_nodes.size()];
         deltas = new T*[n_nodes.size()];
@@ -52,11 +298,6 @@ struct Perceptron
             activation_values [layer] = new T[n_nodes[layer]];
             activation_values1[layer] = new T[n_nodes[layer]];
             deltas[layer] = new T[n_nodes[layer]];
-        }
-
-        for(long layer = 0;layer < n_layers;layer++)
-        {
-            number_of_nodes [layer] = n_nodes[layer+1];
         }
 
         for(long layer = 0;layer < n_layers;layer++)
@@ -77,36 +318,18 @@ struct Perceptron
             }
         }
 
-    }
+        //weights_neuron[0][0][0] = .1;        weights_neuron[0][0][1] = .2;
+        //weights_neuron[0][1][0] = .3;        weights_neuron[0][1][1] = .4;
+        //weights_neuron[0][2][0] = .5;        weights_neuron[0][2][1] = .6;
 
-    T sigmoid1(T x)
-    {
-        return 1.0f / (1.0f + exp(-x));
-    }
+        //weights_bias[0][0] = .1;
+        //weights_bias[0][1] = .2;
+        //weights_bias[0][2] = .3;
 
-    T dsigmoid1(T x)
-    {
-        return (1.0f - x)*x;
-    }
+        //weights_neuron[1][0][0] = .6;        weights_neuron[1][0][1] = .7;      weights_neuron[1][0][2] = .8;
 
-    T sigmoid2(T x)
-    {
-        return log(1+exp(0.05*x));
-    }
+        //weights_bias[1][0] = .5;
 
-    T dsigmoid2(T x)
-    {
-        return 0.05/(1+exp(-0.05*x));
-    }
-
-    T sigmoid(T x)
-    {
-        return (perror<4000)?sigmoid2(x):sigmoid1(x);
-    }
-
-    T dsigmoid(T x)
-    {
-        return (perror<4000)?dsigmoid2(x):dsigmoid1(x);
     }
 
     T * model(long n_elements,long n_labels,T * variables)
@@ -127,7 +350,7 @@ struct Perceptron
                 {
                     sum += activation_values1[layer][j] * weights_neuron[layer][i][j];
                 }
-                activation_values1[layer+1][i] = sigmoid(sum);
+                activation_values1[layer+1][i] = sigmoid(sum,get_sigmoid());
             }
         }
         long last_layer = n_nodes.size()-2;
@@ -138,76 +361,81 @@ struct Perceptron
         return labels;
     }
 
-    void train(T epsilon,long n_iterations,long n_elements,long n_variables,T * variables,long n_labels, T * labels)
+    int get_sigmoid()
     {
+        return sigmoid_type;
+    }
+
+    void train(int p_sigmoid_type,T p_epsilon,long n_iterations,long n_elements,long n_variables,T * variables,long n_labels, T * labels)
+    {
+        sigmoid_type = p_sigmoid_type;
+        epsilon = p_epsilon;
         if(n_variables != n_nodes[0]){std::cout << "error 789437248932748293" << std::endl;exit(0);}
         for(long iter = 0; iter < n_iterations; iter++)
         {
+            ierror = 1e10;
+            bool init = true;
             perror = 1e10;
             T error = 0;
-            for(long n=0,k=0,t=0;n<n_elements;n++)
+
+
+            //////////////////////////////////////////////////////////////////////////////////
+            //                                                                              //
+            //          Multi-threaded block                                                //
+            //                                                                              //
+            //////////////////////////////////////////////////////////////////////////////////
+            std::vector<boost::thread*> threads;
+            std::vector<std::vector<long> > vrtx(boost::thread::hardware_concurrency());
+            std::vector<training_info<T>*> g;
+            for(long i=0;i<n_elements;i++)
             {
-                // initialize input activations
-                for(long i=0;i<n_nodes[0];i++,k++)
-                {
-                    activation_values[0][i] = variables[k];
-                }
-                // forward propagation
-                for(long layer = 0; layer < n_layers; layer++)
-                {
-                    for(long i=0;i<n_nodes[layer+1];i++)
-                    {
-                        T sum = weights_bias[layer][i];
-                        for(long j=0;j<n_nodes[layer];j++)
-                        {
-                            sum += activation_values[layer][j] * weights_neuron[layer][i][j];
-                        }
-                        activation_values[layer+1][i] = sigmoid(sum);
-                    }
-                }
-                long last_layer = n_nodes.size()-2;
-                // initialize observed labels
-                for(long i=0;i<n_nodes[last_layer];i++,t++)
-                {
-                    deltas[last_layer][i] = labels[t] - activation_values[last_layer][i];
-                    error += fabs(deltas[last_layer][i]);
-                }
-                // back propagation
-                for(long layer = n_layers-1; layer >= 0; layer--)
-                {
-                    // back propagate deltas
-                    for(long i=0;i<n_nodes[layer+1];i++)
-                    {
-                        deltas[layer][i] = 0;
-                        for(long j=0;j<n_nodes[layer+2];j++)
-                        {
-                            if(layer+1==last_layer)
-                            {
-                                deltas[layer][i] += dsigmoid(activation_values[layer+1][i])*deltas[layer+1][j];
-                            }
-                            else
-                            {
-                                deltas[layer][i] += dsigmoid(activation_values[layer+1][i])*deltas[layer+1][j]*weights_neuron[layer+1][j][i];
-                            }
-                        }
-                    }
-                    // biases
-                    for(long i=0;i<n_nodes[layer+1];i++)
-                    {
-                        weights_bias[layer][i] += epsilon * deltas[layer][i];
-                    }
-                    // neuron weights
-                    for(long i=0;i<n_nodes[layer+1];i++)
-                    {
-                        for(long j=0;j<n_nodes[layer];j++)
-                        {
-                            weights_neuron[layer][i][j] += epsilon * activation_values[layer][j] * deltas[layer][i];
-                        }
-                    }
-                }
+              vrtx[i%vrtx.size()].push_back(i);
             }
-            std::cout << "error=" << error << std::endl;
+            for(long i=0;i<vrtx.size();i++)
+            {
+              g.push_back(new training_info<T>());
+            }
+            for(long thread=0;thread<vrtx.size();thread++)
+            {
+
+              g[thread]->n_nodes = n_nodes;
+              g[thread]->n_elements = n_elements;
+              g[thread]->n_variables = n_variables;
+              g[thread]->n_labels = n_labels;
+              g[thread]->n_layers = n_layers;
+              g[thread]->weights_neuron = weights_neuron;
+              g[thread]->weights_bias = weights_bias;
+              g[thread]->epsilon = epsilon;
+              g[thread]->type = get_sigmoid();
+
+              g[thread]->init();
+              threads.push_back(new boost::thread(training_worker<T>,g[thread],vrtx[thread],variables,labels));
+            }
+            for(long thread=0;thread<vrtx.size();thread++)
+            {
+              threads[thread]->join();
+              delete threads[thread];
+            }
+            for(long thread=0;thread<vrtx.size();thread++)
+            {
+              g[thread]->globalUpdate();
+              error += g[thread]->partial_error;
+              g[thread]->destroy();
+              delete g[thread];
+            }
+            threads.clear();
+            vrtx.clear();
+            g.clear();
+
+
+            std::cout << "type=" << sigmoid_type << "\tepsilon=" << epsilon << '\t' << "error=" << error << std::endl;
             perror = error;
+            if(init)
+            {
+                ierror = error;
+                init = false;
+            }
+
         }
     }
 
@@ -289,6 +517,10 @@ void keyboard(unsigned char key,int x,int y)
   switch(key)
   {
     case 27:exit(1);break;
+    case 'w':perceptron->epsilon *= 1.1; break;
+    case 's':perceptron->epsilon /= 1.1; break;
+    case 'a':perceptron->sigmoid_type = (perceptron->sigmoid_type+1)%2; break;
+    case 'd':perceptron->sigmoid_type = (perceptron->sigmoid_type+1)%2; break;
     default:break;
   }
 }
@@ -298,7 +530,6 @@ void test_xor()
   std::vector<long> nodes;
   nodes.push_back(2); // inputs
   nodes.push_back(3); // hidden layer
-  nodes.push_back(2); // hidden layer
   nodes.push_back(1); // output layer
   nodes.push_back(1); // outputs
   Perceptron<double> perceptron(nodes);
@@ -316,47 +547,69 @@ void test_xor()
   out_dat[1] = 1;
   out_dat[2] = 1;
   out_dat[3] = 0;
-  perceptron.train(0.1,100000,4,2,in_dat,1,out_dat);
+  perceptron.train(0,100,100000,4,2,in_dat,1,out_dat);
 }
 
 void test_spiral()
 {
   std::vector<long> nodes;
   nodes.push_back(2); // inputs
-  nodes.push_back(5); // hidden layer
-  nodes.push_back(5); // hidden layer
+  nodes.push_back(10); // hidden layer
+  nodes.push_back(10); // hidden layer
+  nodes.push_back(10); // hidden layer
+  nodes.push_back(10); // hidden layer
   nodes.push_back(1); // output layer
   nodes.push_back(1); // outputs
   perceptron = new Perceptron<double>(nodes);
-  int num_pts = 1000;
-   in_dat = new double[num_pts*2];
-  out_dat = new double[num_pts];
-  double R;
-  for(int pt=0;pt<num_pts;pt+=2)
+  perceptron->epsilon = .1;
+  perceptron->sigmoid_type = 0;
+  int num_pts = 100;
+  int num_iters = 1000;
+  while(true)
   {
-    R = (double)pt/num_pts;
-     in_dat[pt*2  ] =  R*cos(pt*0.01);
-     in_dat[pt*2+1] =  R*sin(pt*0.01);
-     in_dat[pt*2+2] = -R*cos(pt*0.01);
-     in_dat[pt*2+3] = -R*sin(pt*0.01);
-    out_dat[pt  ] = 1;
-    out_dat[pt+1] = 0;
+    std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
+
+    int num_pts = 100;
+     in_dat = new double[num_pts*2];
+    out_dat = new double[num_pts];
+    double R;
+    for(int pt=0;pt<num_pts;pt+=2)
+    {
+      R = (double)pt/num_pts;
+       in_dat[pt*2  ] =  R*cos(4*M_PI*R);
+       in_dat[pt*2+1] =  R*sin(4*M_PI*R);
+       in_dat[pt*2+2] = -R*cos(4*M_PI*R);
+       in_dat[pt*2+3] = -R*sin(4*M_PI*R);
+      out_dat[pt  ] = 1;
+      out_dat[pt+1] = 0;
+    }
+
+    perceptron->train(perceptron->sigmoid_type,perceptron->epsilon,num_iters,num_pts,2,in_dat,1,out_dat);
+    delete []  in_dat;
+    delete [] out_dat;
+    //num_pts = (int)(2*num_pts);
+    //num_iters = (int)(2*num_iters);
   }
-  perceptron->train(0.01,1000000,num_pts,2,in_dat,1,out_dat);
 }
 
 void test_func()
 {
   std::vector<long> nodes;
   nodes.push_back(2); // inputs
-  nodes.push_back(25); // hidden layer
-  nodes.push_back(25); // hidden layer
+  nodes.push_back(150); // hidden layer
+  nodes.push_back(150); // hidden layer
+  nodes.push_back(150); // hidden layer
+  nodes.push_back(150); // hidden layer
   nodes.push_back(1); // output layer
   nodes.push_back(1); // outputs
   perceptron = new Perceptron<double>(nodes);
+  perceptron->epsilon = .1;
+  perceptron->sigmoid_type = 0;
+  int num_pts = 100;
+  int num_iters = 1000;
   while(true)
   {
-    int num_pts = 100000;
+    std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
      in_dat = new double[num_pts*2];
     out_dat = new double[num_pts];
     double R;
@@ -380,17 +633,19 @@ void test_func()
       }
       //std::cout << out_dat[pt] << std::endl;
     }
-    perceptron->train(0.01,1000,num_pts,2,in_dat,1,out_dat);
+    perceptron->train(perceptron->sigmoid_type,perceptron->epsilon,num_iters,num_pts,2,in_dat,1,out_dat);
     delete []  in_dat;
     delete [] out_dat;
+    num_pts = (int)(2*num_pts);
+    num_iters = (int)(2*num_iters);
   }
 }
 
 int main(int argc,char ** argv)
 {
   //test_xor();
-  //test_spiral();
-  boost::thread * th = new boost::thread(test_func);
+  boost::thread * th = new boost::thread(test_spiral);
+  //boost::thread * th = new boost::thread(test_func);
   glutInit(&argc, argv);
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
   glutCreateWindow("multi-layer nn tests");
