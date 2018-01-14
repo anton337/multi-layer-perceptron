@@ -1,0 +1,14 @@
+#g++ -g3 -O0 main.cpp -lglut -lGL -lGLU -lboost_thread -lboost_system;#gdb ./a.out
+g++ -g0 -O3 main.cpp -lglut -lGL -lGLU -lboost_thread -lboost_system;#./a.out
+main.cpp: In function 'void test_boltzman()':
+main.cpp:1695:53: error: 'in_dump' was not declared in this scope
+                                                   , in_dump
+                                                     ^
+main.cpp:1696:53: error: 'out_dump' was not declared in this scope
+                                                   , out_dump
+                                                     ^
+main.cpp:1697:53: error: 'prd_dump' was not declared in this scope
+                                                   , prd_dump
+                                                     ^
+Makefile:2: recipe for target 'all' failed
+make: *** [all] Error 1
