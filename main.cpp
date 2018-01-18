@@ -55,6 +55,12 @@ T dsigmoid(T x,int type)
     }
 }
 
+template < typename T >
+T max(T a,T b)
+{
+    return (a>b)?a:b;
+}
+
 template<typename T>
 struct quasi_newton_info
 {
@@ -177,12 +183,12 @@ struct quasi_newton_info
             {
                 for(long j=0;j<n_nodes[layer];j++,k++)
                 {
-                    H[k*size+k] = 1;
+                    H[k*size+k] = -1;
                 }
             }
             for(long i=0;i<n_nodes[layer+1];i++,k++)
             {
-                H[k*size+k] = 1;
+                H[k*size+k] = -1;
             }
         }
         return H;
@@ -205,10 +211,13 @@ struct quasi_newton_info
     {
         long size = get_size();
         T * y = new T[size];
+        T y_m = 0;
         for(long k=0;k<size;k++)
         {
             y[k] = grad_2[k] - grad_1[k];
+            y_m = max(y_m,fabs(y[k]));
         }
+        std::cout << "y:" << y_m << std::endl;
         return y;
     }
 
@@ -218,7 +227,7 @@ struct quasi_newton_info
         T * dx = apply(H,grad_2);
         for(long k=0;k<size;k++)
         {
-            dx[k] *= alpha;
+            dx[k] *= -alpha;
         }
         return dx;
     }
@@ -246,7 +255,7 @@ struct quasi_newton_info
         {
             ret += a[i]*b[i];
         }
-        T eps = 1e-5;
+        T eps = 1e-4;
         if(ret<0)
         {
             ret -= eps;
@@ -288,15 +297,15 @@ struct quasi_newton_info
         return y;
     }
 
-    T limit(T x)
+    T limit(T x,T eps)
     {
         if(x>0)
         {
-            if(x>1)return 1;
+            if(x>eps)return eps;
         }
         else
         {
-            if(x<-1)return -1;
+            if(x<-eps)return -eps;
         }
         return x;
     }
@@ -312,19 +321,21 @@ struct quasi_newton_info
           dx_Hy[i] = dX[i] - dx_Hy[i];
         }
         T * outer = get_outer_product(dx_Hy,dx_Hy);
-        T inner = 1.0 / (get_inner_product(dx_Hy,Y));
-        T eps = 1e-2;
+        T inner = -1.0 / (get_inner_product(dx_Hy,Y));
+        std::cout << "inner:" << inner << std::endl;
+        T eps = 1;
+        T eps2 = 100;
         for(long i=0,k=0;i<size;i++)
         {
           for(long j=0;j<size;j++,k++)
           {
             if(i==j)
             {
-              H[k] += limit(eps * outer[k] * inner);
+              H[k] += limit(eps * outer[k] * inner,eps2);
             }
             else
             {
-              H[k] += limit(eps * outer[k] * inner);
+              H[k] += limit(eps * outer[k] * inner,eps2);
             }
           }
         }
@@ -803,11 +814,11 @@ struct Perceptron
         quasi_newton->weights_neuron = weights_neuron;
         quasi_newton->weights_bias = weights_bias;
         quasi_newton->init_QuasiNewton();
+        ierror = 1e10;
+        bool init = true;
+        perror = 1e10;
         for(long iter = 0; iter < n_iterations; iter++)
         {
-            ierror = 1e10;
-            bool init = true;
-            perror = 1e10;
             T error = 0;
 
 
@@ -862,8 +873,8 @@ struct Perceptron
             g.clear();
 
             static int cnt1 = 0;
-            if(cnt1%100==0)
-            std::cout << "quasi_newton_update=" << quasi_newton->quasi_newton_update << "\ttype=" << sigmoid_type << "\tepsilon=" << epsilon << "\talpha=" << alpha << '\t' << "error=" << error << std::endl;
+            //if(cnt1%100==0)
+            std::cout << "quasi_newton_update=" << quasi_newton->quasi_newton_update << "\ttype=" << sigmoid_type << "\tepsilon=" << epsilon << "\talpha=" << alpha << '\t' << "error=" << error << "\tdiff=" << (error-perror) << std::endl;
             cnt1++;
             perror = error;
             if(init)
@@ -1297,7 +1308,7 @@ struct RBM
     //for(int t=2;t<3&&t<errs.size();t++)
     //  *err += (errs[errs.size()+1-t]-*err)/t;
     static int cnt2 = 0;
-    if(cnt2%10==0)
+    //if(cnt2%10==0)
     std::cout << "Boltzmann error:" << *err << std::endl;
     cnt2++;
     //errs.push_back(*err);
