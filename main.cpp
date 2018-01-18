@@ -56,8 +56,388 @@ T dsigmoid(T x,int type)
 }
 
 template<typename T>
+struct quasi_newton_info
+{
+    quasi_newton_info()
+    {
+        quasi_newton_update = false;
+    }
+
+    long get_size()
+    {
+        long size = 0;
+        for(long layer = 0;layer < n_layers;layer++)
+        {
+            size += n_nodes[layer+1]*n_nodes[layer] + n_nodes[layer+1];
+        }
+        return size;
+    }
+
+    void init_gradient ()
+    {
+        long size = get_size();
+        for(long layer = 0,k = 0;layer < n_layers;layer++)
+        {
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                for(long j=0;j<n_nodes[layer];j++,k++)
+                {
+                    grad_tmp[k] = 0;
+                }
+            }
+            for(long i=0;i<n_nodes[layer+1];i++,k++)
+            {
+                grad_tmp[k] = 0;
+            }
+        }
+    }
+
+    void copy (T * src,T * dst,long size)
+    {
+        for(long k=0;k<size;k++)
+        {
+            dst[k] = src[k];
+        }
+    }
+
+    bool quasi_newton_update;
+    long n_layers;
+    T *** weights_neuron;
+    T **  weights_bias;
+    std::vector<long> n_nodes;
+    T * grad_tmp;
+    T * grad_1;
+    T * grad_2;
+    T * Y;
+    T * dX;
+    T * B;
+    T * H;
+    T alpha;
+
+    void init_QuasiNewton()
+    {
+        long size = get_size();
+        grad_tmp = new T[size];
+        init_gradient();
+        grad_1 = new T[size];
+        grad_2 = new T[size];
+        copy(grad_tmp,grad_1,size);
+        copy(grad_tmp,grad_2,size);
+        B = new T[size*size];
+        T * B_tmp = init_B();
+        copy(B_tmp,B,size*size);
+        delete [] B_tmp;
+        H = new T[size*size];
+        T * H_tmp = init_H();
+        copy(H_tmp,H,size*size);
+        delete [] H_tmp;
+        dX = new T[size*size];
+        T * dX_tmp = get_dx();
+        copy(dX_tmp,dX,size);
+        delete [] dX_tmp;
+        Y = new T[size*size];
+    }
+
+    T * init_B()
+    {
+        long size = get_size();
+        T * B = new T[size*size];
+        for(long t=0;t<size*size;t++)
+        {
+            B[t] = 0;
+        }
+        for(long layer = 0, k = 0;layer < n_layers;layer++)
+        {
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                for(long j=0;j<n_nodes[layer];j++,k++)
+                {
+                    B[k*size+k] = weights_neuron[layer][i][j];
+                }
+            }
+            for(long i=0;i<n_nodes[layer+1];i++,k++)
+            {
+                B[k*size+k] = weights_bias[layer][i];
+            }
+        }
+        return B;
+    }
+
+    T * init_H()
+    {
+        long size = get_size();
+        T * H = new T[size*size];
+        for(long t=0;t<size*size;t++)
+        {
+            H[t] = 0;
+        }
+        for(long layer = 0, k = 0;layer < n_layers;layer++)
+        {
+            for(long i=0;i<n_nodes[layer+1];i++)
+            {
+                for(long j=0;j<n_nodes[layer];j++,k++)
+                {
+                    H[k*size+k] = 1;
+                }
+            }
+            for(long i=0;i<n_nodes[layer+1];i++,k++)
+            {
+                H[k*size+k] = 1;
+            }
+        }
+        return H;
+    }
+
+    void update_QuasiNewton()
+    {
+        long size = get_size();
+        copy(grad_2,grad_1,size);
+        copy(grad_tmp,grad_2,size);
+        T * Y_tmp = get_y();
+        copy(Y_tmp,Y,size);
+        delete [] Y_tmp;
+        T * dX_tmp = get_dx();
+        copy(dX_tmp,dX,size);
+        delete [] dX_tmp;
+    }
+
+    T * get_y ()
+    {
+        long size = get_size();
+        T * y = new T[size];
+        for(long k=0;k<size;k++)
+        {
+            y[k] = grad_2[k] - grad_1[k];
+        }
+        return y;
+    }
+
+    T * get_dx ()
+    {
+        long size = get_size();
+        T * dx = apply(H,grad_2);
+        for(long k=0;k<size;k++)
+        {
+            dx[k] *= alpha;
+        }
+        return dx;
+    }
+
+    T * get_outer_product(T * a,T * b)
+    {
+        long size = get_size();
+        long prod_size = size*size;
+        T * prod = new T[prod_size];
+        for(long i=0,k=0;i<size;i++)
+        {
+          for(long j=0;j<size;j++,k++)
+          {
+            prod[k] = a[i]*b[j];
+          }
+        }
+        return prod;
+    }
+
+    T get_inner_product(T * a,T * b)
+    {
+        T ret = 0;
+        long size = get_size();
+        for(long i=0;i<size;i++)
+        {
+            ret += a[i]*b[i];
+        }
+        T eps = 1e-5;
+        if(ret<0)
+        {
+            ret -= eps;
+        }
+        else
+        {
+            ret += eps;
+        }
+        return ret;
+    }
+
+    T * apply(T * W, T * x)
+    {
+        long size = get_size();
+        T * y = new T[size];
+        for(long i=0,k=0;i<size;i++)
+        {
+          y[i] = 0;
+          for(long j=0;j<size;j++,k++)
+          {
+            y[i] += W[k]*x[j];
+          }
+        }
+        return y;
+    }
+
+    T * apply_t(T * x, T * W)
+    {
+        long size = get_size();
+        T * y = new T[size];
+        for(long i=0,k=0;i<size;i++)
+        {
+          y[i] = 0;
+          for(long j=0;j<size;j++,k++)
+          {
+            y[i] += W[size*j+i]*x[j];
+          }
+        }
+        return y;
+    }
+
+    T limit(T x)
+    {
+        if(x>0)
+        {
+            if(x>1)return 1;
+        }
+        else
+        {
+            if(x<-1)return -1;
+        }
+        return x;
+    }
+
+    // SR1
+    void SR1_update()
+    {
+        update_QuasiNewton();
+        long size = get_size();
+        T * dx_Hy = apply(H,Y);
+        for(long i=0;i<size;i++)
+        {
+          dx_Hy[i] = dX[i] - dx_Hy[i];
+        }
+        T * outer = get_outer_product(dx_Hy,dx_Hy);
+        T inner = 1.0 / (get_inner_product(dx_Hy,Y));
+        T eps = 1e-2;
+        for(long i=0,k=0;i<size;i++)
+        {
+          for(long j=0;j<size;j++,k++)
+          {
+            if(i==j)
+            {
+              H[k] += limit(eps * outer[k] * inner);
+            }
+            else
+            {
+              H[k] += limit(eps * outer[k] * inner);
+            }
+          }
+        }
+        delete [] dx_Hy;
+        delete [] outer;
+    }
+
+    // Broyden
+    void Broyden_update()
+    {
+        update_QuasiNewton();
+        long size = get_size();
+        T * dx_Hy = apply(H,Y);
+        for(long i=0;i<size;i++)
+        {
+          dx_Hy[i] = dX[i] - dx_Hy[i];
+        }
+        T * xH = apply_t(dX,H);
+        T * outer = get_outer_product(dx_Hy,xH);
+        T inner = 1.0 / (get_inner_product(xH,Y));
+        for(long i=0;i<size*size;i++)
+        {
+          H[i] += outer[i] * inner;
+        }
+        delete [] dx_Hy;
+        delete [] xH;
+        delete [] outer;
+    }
+
+    // DFP
+    void DFP_update()
+    {
+        update_QuasiNewton();
+        long size = get_size();
+        T * Hy = apply(H,Y);
+        T * outer_2 = get_outer_product(Hy,Hy);
+        T inner_2 = -1.0 / (get_inner_product(Hy,Y));
+        T * outer_1 = get_outer_product(dX,dX);
+        T inner_1 = 1.0 / (get_inner_product(dX,Y));
+        for(long i=0;i<size*size;i++)
+        {
+          H[i] += outer_1[i] * inner_1 + outer_2[i] * inner_2;
+        }
+        delete [] outer_2;
+        delete [] outer_1;
+        delete [] Hy;
+    }
+
+    T * apply_M(T * A, T * B)
+    {
+        long size = get_size();
+        T * C = new T[size*size];
+        for(long i=0,k=0;i<size;i++)
+        {
+          for(long j=0;j<size;j++,k++)
+          {
+            C[k] = 0;
+            for(long t=0;t<size;t++)
+            {
+              C[k] += A[i*size+t]*B[t*size+j];
+            }
+          }
+        }
+        return C;
+    }
+
+    // BFGS
+    void BFGS_update()
+    {
+        update_QuasiNewton();
+        long size = get_size();
+        T inner = 1.0 / (get_inner_product(Y,dX));
+        T * outer_xx = get_outer_product(dX,dX);
+        T * outer_xy = get_outer_product(dX,Y);
+        T * outer_yx = get_outer_product(Y,dX);
+        for(long i=0,k=0;i<size;i++)
+        {
+          for(long j=0;j<size;j++,k++)
+          {
+            if(i==j)
+            {
+              outer_xy[k] = 1-outer_xy[k]*inner;
+              outer_yx[k] = 1-outer_yx[k]*inner;
+            }
+            else
+            {
+              outer_xy[k] = -outer_xy[k]*inner;
+              outer_yx[k] = -outer_yx[k]*inner;
+            }
+            outer_xx[k] = outer_xx[k]*inner;
+          }
+        }
+        T * F = apply_M(outer_xy,H);
+        T * G = apply_M(F,outer_yx);
+        for(long i=0;i<size*size;i++)
+        {
+          H[i] = G[i] + outer_xx[i];
+        }
+        delete [] F;
+        delete [] G;
+        delete [] outer_xx;
+        delete [] outer_xy;
+        delete [] outer_yx;
+    }
+
+};
+
+template<typename T>
 struct training_info
 {
+
+    quasi_newton_info<T> * quasi_newton;
+
     std::vector<long> n_nodes;
     T **  activation_values;
     T **  deltas;
@@ -82,7 +462,7 @@ struct training_info
 
     }
 
-    void init()
+    void init(T _alpha)
     {
         type = 0;
         partial_error = 0;
@@ -145,23 +525,63 @@ struct training_info
         delete [] partial_weights_bias;
     }
 
-    void globalUpdate()
+    void update_gradient ()
     {
-        for(long layer = 0;layer < n_layers;layer++)
+        for(long layer = 0,k = 0;layer < n_layers;layer++)
         {
             for(long i=0;i<n_nodes[layer+1];i++)
             {
-                for(long j=0;j<n_nodes[layer];j++)
+                for(long j=0;j<n_nodes[layer];j++,k++)
                 {
-                    weights_neuron[layer][i][j] += partial_weights_neuron[layer][i][j] / n_elements;
+                    quasi_newton->grad_tmp[k] += partial_weights_neuron[layer][i][j] / n_elements;
                 }
             }
-            for(long i=0;i<n_nodes[layer+1];i++)
+            for(long i=0;i<n_nodes[layer+1];i++,k++)
             {
-                weights_bias[layer][i] += partial_weights_bias[layer][i] / n_elements;
+                quasi_newton->grad_tmp[k] += partial_weights_bias[layer][i] / n_elements;
             }
         }
     }
+
+    void globalUpdate()
+    {
+        if(quasi_newton->quasi_newton_update)
+        {
+            quasi_newton->SR1_update();
+            for(long layer = 0,k = 0;layer < n_layers;layer++)
+            {
+                for(long i=0;i<n_nodes[layer+1];i++)
+                {
+                    for(long j=0;j<n_nodes[layer];j++,k++)
+                    {
+                        weights_neuron[layer][i][j] += quasi_newton->dX[k];
+                    }
+                }
+                for(long i=0;i<n_nodes[layer+1];i++,k++)
+                {
+                    weights_bias[layer][i] += quasi_newton->dX[k];
+                }
+            }
+        }
+        else
+        {
+            for(long layer = 0,k = 0;layer < n_layers;layer++)
+            {
+                for(long i=0;i<n_nodes[layer+1];i++)
+                {
+                    for(long j=0;j<n_nodes[layer];j++,k++)
+                    {
+                        weights_neuron[layer][i][j] += epsilon * quasi_newton->grad_tmp[k];
+                    }
+                }
+                for(long i=0;i<n_nodes[layer+1];i++,k++)
+                {
+                    weights_bias[layer][i] += epsilon * quasi_newton->grad_tmp[k];
+                }
+            }
+        }
+    }
+
 };
 
 template<typename T>
@@ -225,7 +645,7 @@ void training_worker(training_info<T> * g,std::vector<long> const & vrtx,T * var
             // biases
             for(long i=0;i<g->n_nodes[layer+1];i++)
             {
-                g->partial_weights_bias[layer][i] += g->epsilon * g->deltas[layer+1][i];
+                g->partial_weights_bias[layer][i] += g->deltas[layer+1][i];
                 //std::cout << g->partial_weights_bias[layer][i] << '\t';
             }
             //std::cout << std::endl;
@@ -235,7 +655,7 @@ void training_worker(training_info<T> * g,std::vector<long> const & vrtx,T * var
             {
                 for(long j=0;j<g->n_nodes[layer];j++)
                 {
-                    g->partial_weights_neuron[layer][i][j] += g->epsilon * g->activation_values[layer][j] * g->deltas[layer+1][i];
+                    g->partial_weights_neuron[layer][i][j] += g->activation_values[layer][j] * g->deltas[layer+1][i];
                     //std::cout << g->partial_weights_neuron[layer][i][j] << '\t';
                 }
                 //std::cout << std::endl;
@@ -251,6 +671,7 @@ void training_worker(training_info<T> * g,std::vector<long> const & vrtx,T * var
 template<typename T>
 struct Perceptron
 {
+    quasi_newton_info<T> * quasi_newton;
 
     T ierror;
     T perror;
@@ -267,6 +688,7 @@ struct Perceptron
     std::vector<long> n_nodes;
 
     T epsilon;
+    T alpha;
     int sigmoid_type;
 
     // std::vector<long> nodes;
@@ -277,7 +699,10 @@ struct Perceptron
     Perceptron(std::vector<long> p_nodes)
     {
 
+        quasi_newton = NULL;
+
         sigmoid_type = 0;
+        alpha = 0.1;
 
         ierror = 1e10;
         perror = 1e10;
@@ -371,6 +796,13 @@ struct Perceptron
         sigmoid_type = p_sigmoid_type;
         epsilon = p_epsilon;
         if(n_variables != n_nodes[0]){std::cout << "error 789437248932748293" << std::endl;exit(0);}
+        quasi_newton = new quasi_newton_info<T>();
+        quasi_newton->alpha = alpha;
+        quasi_newton->n_nodes = n_nodes;
+        quasi_newton->n_layers = n_layers;
+        quasi_newton->weights_neuron = weights_neuron;
+        quasi_newton->weights_bias = weights_bias;
+        quasi_newton->init_QuasiNewton();
         for(long iter = 0; iter < n_iterations; iter++)
         {
             ierror = 1e10;
@@ -395,9 +827,10 @@ struct Perceptron
             {
               g.push_back(new training_info<T>());
             }
+            quasi_newton->init_gradient();
             for(long thread=0;thread<vrtx.size();thread++)
             {
-
+              g[thread]->quasi_newton = quasi_newton;
               g[thread]->n_nodes = n_nodes;
               g[thread]->n_elements = n_elements;
               g[thread]->n_variables = n_variables;
@@ -408,12 +841,13 @@ struct Perceptron
               g[thread]->epsilon = epsilon;
               g[thread]->type = get_sigmoid();
 
-              g[thread]->init();
+              g[thread]->init(alpha);
               threads.push_back(new boost::thread(training_worker<T>,g[thread],vrtx[thread],variables,labels));
             }
             for(long thread=0;thread<vrtx.size();thread++)
             {
               threads[thread]->join();
+              g[thread]->update_gradient();
               delete threads[thread];
             }
             for(long thread=0;thread<vrtx.size();thread++)
@@ -427,8 +861,10 @@ struct Perceptron
             vrtx.clear();
             g.clear();
 
-
-            std::cout << "type=" << sigmoid_type << "\tepsilon=" << epsilon << '\t' << "error=" << error << std::endl;
+            static int cnt1 = 0;
+            if(cnt1%100==0)
+            std::cout << "quasi_newton_update=" << quasi_newton->quasi_newton_update << "\ttype=" << sigmoid_type << "\tepsilon=" << epsilon << "\talpha=" << alpha << '\t' << "error=" << error << std::endl;
+            cnt1++;
             perror = error;
             if(init)
             {
@@ -444,32 +880,50 @@ struct Perceptron
 
 };
 
-float *  in_dat = NULL;
-float * out_dat = NULL;
+double *  in_dat = NULL;
+double * out_dat = NULL;
 
-Perceptron<float> * perceptron = NULL;
+Perceptron<double> * perceptron = NULL;
 
+int nx = 5, ny = 5;
 void
 drawStuff(void)
 {
-  //double in[2];
-  //float dx = 2/200.0f;
-  //float dy = 2/200.0f;
-  //glBegin(GL_QUADS);
-  //for (float x = -1; x <= 1; x+=dx) 
-  //for (float y = -1; y <= 1; y+=dy) 
-  //{
-  //  in[0] = x;
-  //  in[1] = y;
-  //  double * out = perceptron->model(2,1,in);
-  //  glColor3f(out[0],out[0],out[0]);
-  //  delete out;
-  //  glVertex3f(x   ,y   ,0);
-  //  glVertex3f(x+dx,y   ,0);
-  //  glVertex3f(x+dx,y+dy,0);
-  //  glVertex3f(x   ,y+dy,0);
-  //}
-  //glEnd();
+  if(perceptron != NULL)
+  {
+    int num_inputs = nx+ny;
+    double * in = new double[nx+ny];
+    double dx = 2/200.0f;
+    double dy = 2/200.0f;
+    glBegin(GL_QUADS);
+    for (double x = -1; x <= 1; x+=dx) 
+    for (double y = -1; y <= 1; y+=dy) 
+    {
+      int bX = pow(2,nx)*(x+1)/2;
+      int bY = pow(2,ny)*(y+1)/2;
+      for(long i=0;i<nx;i++)
+      {
+        in[i] = bX%2==0;
+        bX/=2;
+      }
+      for(long i=nx;i<nx+ny;i++)
+      {
+        in[i] = bY%2==0;
+        bY/=2;
+      }
+      double * out = perceptron->model(2,1,in);
+      glColor3f(out[0],out[0],out[0]);
+      delete [] out;
+      out = NULL;
+      glVertex3f(x   ,y   ,0);
+      glVertex3f(x+dx,y   ,0);
+      glVertex3f(x+dx,y+dy,0);
+      glVertex3f(x   ,y+dy,0);
+    }
+    glEnd();
+    delete [] in;
+    in = NULL;
+  }
 }
 
 void
@@ -522,15 +976,18 @@ void keyboard(unsigned char key,int x,int y)
     case 27:exit(1);break;
     case 'w':perceptron->epsilon *= 1.1; break;
     case 's':perceptron->epsilon /= 1.1; break;
+    case 'r':perceptron->alpha *= 1.1; break;
+    case 'f':perceptron->alpha /= 1.1; break;
     case 'a':perceptron->sigmoid_type = (perceptron->sigmoid_type+1)%2; break;
     case 'd':perceptron->sigmoid_type = (perceptron->sigmoid_type+1)%2; break;
+    case 'z':if(perceptron->quasi_newton!=NULL){perceptron->quasi_newton->quasi_newton_update=!perceptron->quasi_newton->quasi_newton_update;}break;
     default:break;
   }
 }
 
-float norm(float * dat,long size)
+double norm(double * dat,long size)
 {
-  float ret = 0;
+  double ret = 0;
   for(long i=0;i<size;i++)
   {
     ret += dat[i]*dat[i];
@@ -538,7 +995,7 @@ float norm(float * dat,long size)
   return sqrt(ret);
 }
 
-void zero(float * dat,long size)
+void zero(double * dat,long size)
 {
   for(long i=0;i<size;i++)
   {
@@ -546,7 +1003,7 @@ void zero(float * dat,long size)
   }
 }
 
-void constant(float * dat,float val,long size)
+void constant(double * dat,double val,long size)
 {
   for(long i=0;i<size;i++)
   {
@@ -554,7 +1011,7 @@ void constant(float * dat,float val,long size)
   }
 }
 
-void add(float * A, float * dA, float epsilon, long size)
+void add(double * A, double * dA, double epsilon, long size)
 {
   for(long i=0;i<size;i++)
   {
@@ -567,25 +1024,25 @@ struct gradient_info
   long n;
   long v;
   long h;
-  float * vis0;
-  float * hid0;
-  float * vis;
-  float * hid;
-  float * dW;
-  float * dc;
-  float * db;
-  float partial_err;
-  float * partial_dW;
-  float * partial_dc;
-  float * partial_db;
+  double * vis0;
+  double * hid0;
+  double * vis;
+  double * hid;
+  double * dW;
+  double * dc;
+  double * db;
+  double partial_err;
+  double * partial_dW;
+  double * partial_dc;
+  double * partial_db;
   void init()
   {
     partial_err = 0;
-    partial_dW = new float[h*v];
+    partial_dW = new double[h*v];
     for(int i=0;i<h*v;i++)partial_dW[i]=0;
-    partial_dc = new float[h];
+    partial_dc = new double[h];
     for(int i=0;i<h;i++)partial_dc[i]=0;
-    partial_db = new float[v];
+    partial_db = new double[v];
     for(int i=0;i<v;i++)partial_db[i]=0;
   }
   void destroy()
@@ -607,8 +1064,8 @@ struct gradient_info
 
 void gradient_worker(gradient_info * g,std::vector<long> const & vrtx)
 {
-  float factor = 1.0f / g->n;
-  float factorv= 1.0f / (g->v*g->v);
+  double factor = 1.0f / g->n;
+  double factorv= 1.0f / (g->v*g->v);
   for(long t=0;t<vrtx.size();t++)
   {
     long k = vrtx[t];
@@ -637,7 +1094,7 @@ void gradient_worker(gradient_info * g,std::vector<long> const & vrtx)
   }
 }
 
-void vis2hid_worker(const float * X,float * H,long h,long v,float * c,float * W,std::vector<long> const & vrtx)
+void vis2hid_worker(const double * X,double * H,long h,long v,double * c,double * W,std::vector<long> const & vrtx)
 {
   for(long t=0;t<vrtx.size();t++)
   {
@@ -654,7 +1111,7 @@ void vis2hid_worker(const float * X,float * H,long h,long v,float * c,float * W,
   }
 }
 
-void hid2vis_worker(const float * H,float * V,long h,long v,float * b,float * W,std::vector<long> const & vrtx)
+void hid2vis_worker(const double * H,double * V,long h,long v,double * b,double * W,std::vector<long> const & vrtx)
 {
   for(long t=0;t<vrtx.size();t++)
   {
@@ -676,20 +1133,20 @@ struct RBM
   long h; // number hidden elements
   long v; // number visible elements
   long n; // number of samples
-  float * c; // bias term for hidden state, R^h
-  float * b; // bias term for visible state, R^v
-  float * W; // weight matrix R^h*v
-  float * X; // input data, binary [0,1], v*n
+  double * c; // bias term for hidden state, R^h
+  double * b; // bias term for visible state, R^v
+  double * W; // weight matrix R^h*v
+  double * X; // input data, binary [0,1], v*n
 
-  float * vis0;
-  float * hid0;
-  float * vis;
-  float * hid;
-  float * dW;
-  float * dc;
-  float * db;
+  double * vis0;
+  double * hid0;
+  double * vis;
+  double * hid;
+  double * dW;
+  double * dc;
+  double * db;
 
-  RBM(long _v,long _h,float * _W,float * _b,float * _c,long _n,float * _X)
+  RBM(long _v,long _h,double * _W,double * _b,double * _c,long _n,double * _X)
   {
     //for(long k=0;k<100;k++)
     //  std::cout << _X[k] << "\t";
@@ -710,7 +1167,7 @@ struct RBM
     dc = NULL;
     db = NULL;
   }
-  RBM(long _v,long _h,long _n,float* _X)
+  RBM(long _v,long _h,long _n,double* _X)
   {
     //for(long k=0;k<100;k++)
     //  std::cout << _X[k] << "\t";
@@ -719,9 +1176,9 @@ struct RBM
     h = _h;
     v = _v;
     n = _n;
-    c = new float[h];
-    b = new float[v];
-    W = new float[h*v];
+    c = new double[h];
+    b = new double[v];
+    W = new double[h*v];
     constant(c,0.5f,h);
     constant(b,0.5f,v);
     constant(W,0.5f,v*h);
@@ -738,13 +1195,13 @@ struct RBM
   void init(int offset)
   {
     boost::posix_time::ptime time_start(boost::posix_time::microsec_clock::local_time());
-    if(vis0==NULL)vis0 = new float[n*v];
-    if(hid0==NULL)hid0 = new float[n*h];
-    if(vis==NULL)vis = new float[n*v];
-    if(hid==NULL)hid = new float[n*h];
-    if(dW==NULL)dW = new float[h*v];
-    if(dc==NULL)dc = new float[h];
-    if(db==NULL)db = new float[v];
+    if(vis0==NULL)vis0 = new double[n*v];
+    if(hid0==NULL)hid0 = new double[n*h];
+    if(vis==NULL)vis = new double[n*v];
+    if(hid==NULL)hid = new double[n*h];
+    if(dW==NULL)dW = new double[h*v];
+    if(dc==NULL)dc = new double[h];
+    if(db==NULL)db = new double[v];
 
     //std::cout << "n*v=" << n*v << std::endl;
     //std::cout << "offset=" << offset << std::endl;
@@ -759,7 +1216,7 @@ struct RBM
     //std::cout << "init timing:" << duration << '\n';
   }
 
-  void cd(long nGS,float epsilon,int offset=0,bool bottleneck=false)
+  void cd(long nGS,double epsilon,int offset=0,bool bottleneck=false)
   {
     boost::posix_time::ptime time_0(boost::posix_time::microsec_clock::local_time());
     //std::cout << "cd" << std::endl;
@@ -831,7 +1288,7 @@ struct RBM
     boost::posix_time::ptime time_3(boost::posix_time::microsec_clock::local_time());
     boost::posix_time::time_duration duration32(time_3 - time_2);
     //std::cout << "cd timing 3:" << duration32 << '\n';
-    float * err = new float(0);
+    double * err = new double(0);
     gradient_update(n,vis0,hid0,vis,hid,dW,dc,db,err);
     boost::posix_time::ptime time_4(boost::posix_time::microsec_clock::local_time());
     boost::posix_time::time_duration duration43(time_4 - time_3);
@@ -839,7 +1296,10 @@ struct RBM
     *err = sqrt(*err);
     //for(int t=2;t<3&&t<errs.size();t++)
     //  *err += (errs[errs.size()+1-t]-*err)/t;
+    static int cnt2 = 0;
+    if(cnt2%10==0)
     std::cout << "Boltzmann error:" << *err << std::endl;
+    cnt2++;
     //errs.push_back(*err);
     boost::posix_time::ptime time_5(boost::posix_time::microsec_clock::local_time());
     boost::posix_time::time_duration duration54(time_5 - time_4);
@@ -865,7 +1325,7 @@ struct RBM
     //std::cin >> ch;
   }
 
-  void sigmoid(float * p,float * X,long n)
+  void sigmoid(double * p,double * X,long n)
   {
     for(long i=0;i<n;i++)
     {
@@ -873,7 +1333,7 @@ struct RBM
     }
   }
 
-  void vis2hid_simple(const float * X,float * H)
+  void vis2hid_simple(const double * X,double * H)
   {
     {
       for(long j=0;j<h;j++)
@@ -888,7 +1348,7 @@ struct RBM
     }
   }
 
-  void hid2vis_simple(const float * H,float * V)
+  void hid2vis_simple(const double * H,double * V)
   {
     {
       for(long i=0;i<v;i++)
@@ -903,7 +1363,7 @@ struct RBM
     }
   }
 
-  void vis2hid(const float * X,float * H)
+  void vis2hid(const double * X,double * H)
   {
     std::vector<boost::thread*> threads;
     std::vector<std::vector<long> > vrtx(boost::thread::hardware_concurrency());
@@ -924,7 +1384,7 @@ struct RBM
     vrtx.clear();
   }
 
-  void gradient_update(long n,float * vis0,float * hid0,float * vis,float * hid,float * dW,float * dc,float * db,float * err)
+  void gradient_update(long n,double * vis0,double * hid0,double * vis,double * hid,double * dW,double * dc,double * db,double * err)
   {
     boost::posix_time::ptime time_0(boost::posix_time::microsec_clock::local_time());
 
@@ -985,7 +1445,7 @@ struct RBM
     g.clear();
   }
   
-  void hid2vis(const float * H,float * V)
+  void hid2vis(const double * H,double * V)
   {
     std::vector<boost::thread*> threads;
     std::vector<std::vector<long> > vrtx(boost::thread::hardware_concurrency());
@@ -1044,9 +1504,9 @@ struct DataUnit
   DataUnit *  visible;
   DataUnit * visible0;
   long h,v;
-  float * W;
-  float * b;
-  float * c;
+  double * W;
+  double * b;
+  double * c;
   RBM * rbm;
   long num_iters;
   long batch_iter;
@@ -1056,9 +1516,9 @@ struct DataUnit
     batch_iter = _batch_iter;
     v = _v;
     h = _h;
-    W = new float[v*h];
-    b = new float[v];
-    c = new float[h];
+    W = new double[v*h];
+    b = new double[v];
+    c = new double[h];
     constant(c,0.5f,h);
     constant(b,0.5f,v);
     constant(W,0.5f,v*h);
@@ -1067,9 +1527,9 @@ struct DataUnit
     visible0 = NULL;
   }
 
-  void train(float * dat, long n, long total_n,int n_cd,float epsilon,long n_var)
+  void train(double * dat, long n, long total_n,int n_cd,double epsilon,long n_var)
   {
-    // RBM(long _v,long _h,float * _W,float * _b,float * _c,long _n,float * _X)
+    // RBM(long _v,long _h,double * _W,double * _b,double * _c,long _n,double * _X)
     rbm = new RBM(v,h,W,b,c,n,dat);
     for(long i=0;i<num_iters;i++)
     {
@@ -1078,7 +1538,7 @@ struct DataUnit
       for(long k=0;k<batch_iter;k++)
       {
         rbm->init(offset);
-        //std::cout << "prog:" << 100*(float)k/batch_iter << "%" << std::endl;
+        //std::cout << "prog:" << 100*(double)k/batch_iter << "%" << std::endl;
         rbm->cd(n_cd,epsilon,offset*n_var);
       }
     }
@@ -1086,7 +1546,7 @@ struct DataUnit
     //std::cin >> ch;
   }
 
-  void transform(float* X,float* Y)
+  void transform(double* X,double* Y)
   {
     rbm->vis2hid(X,Y);
   }
@@ -1213,35 +1673,35 @@ struct mRBM
     model_ready = false;
     bottle_neck = NULL;
   }
-  void copy(float * X,float * Y,long num)
+  void copy(double * X,double * Y,long num)
   {
     for(long i=0;i<num;i++)
     {
       Y[i] = X[i];
     }
   }
-  void model_simple(long sample,float * in,float * out)
+  void model_simple(long sample,double * in,double * out)
   {
-    float * X = NULL;
-    float * Y = NULL;
-    X = new float[in_samp];
+    double * X = NULL;
+    double * Y = NULL;
+    X = new double[in_samp];
     for(long i=0;i<in_samp;i++)
     {
       X[i] = in[sample*in_samp+i];
     }
     for(long i=0;i<input_branch.size();i++)
     {
-      Y = new float[input_branch[i]->h];
+      Y = new double[input_branch[i]->h];
       input_branch[i]->rbm->vis2hid_simple(X,Y);
       delete [] X;
       X = NULL;
-      X = new float[input_branch[i]->h];
+      X = new double[input_branch[i]->h];
       copy(Y,X,input_branch[i]->h);
       delete [] Y;
       Y = NULL;
     }
-    float * X_bottleneck = NULL;
-    X_bottleneck = new float[bottle_neck->h];
+    double * X_bottleneck = NULL;
+    X_bottleneck = new double[bottle_neck->h];
     for(long i=0;i<in_samp;i++)
     {
       X_bottleneck[i] = X[i];
@@ -1253,13 +1713,13 @@ struct mRBM
     delete [] X;
     X = NULL;
     {
-      float * Y_bottleneck = NULL;
-      Y_bottleneck = new float[bottle_neck->h];
+      double * Y_bottleneck = NULL;
+      Y_bottleneck = new double[bottle_neck->h];
       bottle_neck->rbm->vis2hid_simple(X_bottleneck,Y_bottleneck);
       bottle_neck->rbm->hid2vis_simple(Y_bottleneck,X_bottleneck);
       delete [] Y_bottleneck;
       Y_bottleneck = NULL;
-      Y = new float[out_samp];
+      Y = new double[out_samp];
       for(long i=in_samp,k=0;i<bottle_neck->h;i++,k++)
       {
         Y[k] = X_bottleneck[i];
@@ -1273,11 +1733,11 @@ struct mRBM
     }
     for(long i=output_branch.size()-1;i>=0;i--)
     {
-      X = new float[output_branch[i]->v];
+      X = new double[output_branch[i]->v];
       output_branch[i]->rbm->hid2vis_simple(Y,X);
       delete [] Y;
       Y = NULL;
-      Y = new float[output_branch[i]->v];
+      Y = new double[output_branch[i]->v];
       copy(X,Y,output_branch[i]->v);
       delete [] X;
       X = NULL;
@@ -1289,10 +1749,10 @@ struct mRBM
     delete [] Y;
     Y = NULL;
   }
-  float ** model(long sample,float * in)
+  double ** model(long sample,double * in)
   {
-    float ** out = new float*[20];
-    for(int i=0;i<20;i++)out[i]=new float[bottle_neck->v];
+    double ** out = new double*[20];
+    for(int i=0;i<20;i++)out[i]=new double[bottle_neck->v];
     for(int l=0;l<20;l++)
     for(int i=0;i<bottle_neck->v;i++)
     out[l][i]=0;
@@ -1301,9 +1761,9 @@ struct mRBM
     //std::cout << in[sample*input_branch[0]->v+i] << '\t';
     //std::cout << '\n';
     long layer = 0;
-    float * X = NULL;
-    float * Y = NULL;
-    X = new float[in_samp];
+    double * X = NULL;
+    double * Y = NULL;
+    X = new double[in_samp];
     for(long i=0;i<in_samp;i++)
     {
       X[i] = in[sample*in_samp+i];
@@ -1320,11 +1780,11 @@ struct mRBM
     //std::cout << "input_branch size:" << input_branch.size() << std::endl;
     for(long i=0;i<input_branch.size();i++)
     {
-      Y = new float[input_branch[i]->h];
+      Y = new double[input_branch[i]->h];
       input_branch[i]->rbm->vis2hid_simple(X,Y);
       delete [] X;
       X = NULL;
-      X = new float[input_branch[i]->h];
+      X = new double[input_branch[i]->h];
       copy(Y,X,input_branch[i]->h);
       delete [] Y;
       Y = NULL;
@@ -1334,8 +1794,8 @@ struct mRBM
       }
       layer++;
     }
-    float * X_bottleneck = NULL;
-    X_bottleneck = new float[bottle_neck->h];
+    double * X_bottleneck = NULL;
+    X_bottleneck = new double[bottle_neck->h];
     for(long i=0;i<in_samp;i++)
     {
       X_bottleneck[i] = X[i];
@@ -1347,8 +1807,8 @@ struct mRBM
     delete [] X;
     X = NULL;
     {
-      float * Y_bottleneck = NULL;
-      Y_bottleneck = new float[bottle_neck->h];
+      double * Y_bottleneck = NULL;
+      Y_bottleneck = new double[bottle_neck->h];
       bottle_neck->rbm->vis2hid_simple(X_bottleneck,Y_bottleneck);
       for(long j=0;j<bottle_neck->v;j++)
       {
@@ -1368,7 +1828,7 @@ struct mRBM
       layer++;
       delete [] Y_bottleneck;
       Y_bottleneck = NULL;
-      Y = new float[out_samp];
+      Y = new double[out_samp];
       for(long i=in_samp,k=0;i<bottle_neck->h;i++,k++)
       {
         Y[k] = X_bottleneck[i];
@@ -1376,7 +1836,7 @@ struct mRBM
       delete [] X_bottleneck;
       X_bottleneck = NULL;
     }
-    //float Y_max = 0;
+    //double Y_max = 0;
     //for(long j=0;j<bottle_neck->v-input_branch[input_branch.size()-1]->v;j++)
     //{
     //  if(Y[j]>Y_max)Y_max = Y[j];
@@ -1388,11 +1848,11 @@ struct mRBM
     layer++;
     for(long i=output_branch.size()-1;i>=0;i--)
     {
-      X = new float[output_branch[i]->v];
+      X = new double[output_branch[i]->v];
       output_branch[i]->rbm->hid2vis_simple(Y,X);
       delete [] Y;
       Y = NULL;
-      Y = new float[output_branch[i]->v];
+      Y = new double[output_branch[i]->v];
       copy(X,Y,output_branch[i]->v);
       delete [] X;
       X = NULL;
@@ -1410,14 +1870,14 @@ struct mRBM
     Y = NULL;
     return out;
   }
-  void train(long in_num,long out_num,long n_samp,long total_n,long n_cd,float epsilon,float * in,float * out)
+  void train(long in_num,long out_num,long n_samp,long total_n,long n_cd,double epsilon,double * in,double * out)
   {
-    float * X = NULL;
-    float * Y = NULL;
-    float * IN = NULL;
-    float * OUT = NULL;
-    X = new float[in_num*n_samp];
-    IN = new float[in_num*n_samp];
+    double * X = NULL;
+    double * Y = NULL;
+    double * IN = NULL;
+    double * OUT = NULL;
+    X = new double[in_num*n_samp];
+    IN = new double[in_num*n_samp];
     for(long i=0;i<in_num*n_samp;i++)
     {
       X[i] = in[i];
@@ -1427,12 +1887,12 @@ struct mRBM
     {
       if(i>0)input_branch[i]->initialize_weights(input_branch[i-1]); // initialize weights to transpose of previous layer weights M_i -> W = M_{i-1} -> W ^ T
       input_branch[i]->train(X,n_samp,total_n,n_cd,epsilon,input_branch[i]->h);
-      Y = new float[input_branch[i]->h*n_samp];
+      Y = new double[input_branch[i]->h*n_samp];
       input_branch[i]->transform(X,Y);
       delete [] X;
       X = NULL;
       //std::cout << "X init:" << in_num*n_samp << "    " << "X fin:" << input_branch[i]->h*n_samp << std::endl;
-      X = new float[input_branch[i]->h*n_samp];
+      X = new double[input_branch[i]->h*n_samp];
       copy(Y,X,input_branch[i]->h*n_samp);
       copy(Y,IN,input_branch[i]->h*n_samp);
       delete [] Y;
@@ -1440,8 +1900,8 @@ struct mRBM
     }
     delete [] X;
     X = NULL;
-    X = new float[out_num*n_samp];
-    OUT = new float[in_num*n_samp];
+    X = new double[out_num*n_samp];
+    OUT = new double[in_num*n_samp];
     for(long i=0;i<out_num*n_samp;i++)
     {
       X[i] = out[i];
@@ -1451,11 +1911,11 @@ struct mRBM
     {
       if(i>0)output_branch[i]->initialize_weights(output_branch[i-1]); // initialize weights to transpose of previous layer weights M_i -> W = M_{i-1} -> W ^ T
       output_branch[i]->train(X,n_samp,total_n,n_cd,epsilon,input_branch[i]->h);
-      Y = new float[output_branch[i]->h*n_samp];
+      Y = new double[output_branch[i]->h*n_samp];
       output_branch[i]->transform(X,Y);
       delete [] X;
       X = NULL;
-      X = new float[output_branch[i]->h*n_samp];
+      X = new double[output_branch[i]->h*n_samp];
       copy(Y,X,output_branch[i]->h*n_samp);
       copy(Y,OUT,output_branch[i]->h*n_samp);
       delete [] Y;
@@ -1465,7 +1925,7 @@ struct mRBM
     X = NULL;
     if(bottle_neck!=NULL)
     {
-      X = new float[bottle_neck->h*n_samp];
+      X = new double[bottle_neck->h*n_samp];
       for(long s=0;s<n_samp;s++)
       {
         long i=0;
@@ -1489,10 +1949,10 @@ struct mRBM
     OUT = NULL;
     model_ready = true;
   }
-  float compare(long sample,float * a,float * b)
+  double compare(long sample,double * a,double * b)
   {
-    float sum_a = 0;
-    float sum_b = 0;
+    double sum_a = 0;
+    double sum_b = 0;
     for(int i=0;i<out_samp;i++)
     {
       sum_a += a[sample*out_samp+i];
@@ -1503,7 +1963,7 @@ struct mRBM
       a[sample*out_samp+i] = (a[sample*out_samp+i]+1e-10)/(sum_a+1e-5);
       b[sample*out_samp+i] = (b[sample*out_samp+i]+1e-10)/(sum_b+1e-5);
     }
-    float score = 0;
+    double score = 0;
     for(int i=0;i<out_samp;i++)
     {
       //score += ((a[sample*out_samp+i]>0.5&&b[sample*out_samp+i]>0.5)||(a[sample*out_samp+i]<0.5&&b[sample*out_samp+i]<0.5))?1:0;
@@ -1512,9 +1972,9 @@ struct mRBM
     }
     return score/out_samp;
   }
-  void compare_all(long num,float * in,float * out)
+  void compare_all(long num,double * in,double * out)
   {
-    float score = 0;
+    double score = 0;
     for(long i=0;i<num;i++)
     {
       score += (compare(i,in,out)-score)/(1+i);
@@ -1528,7 +1988,7 @@ struct mRBM
     //char ch;
     //std::cin >> ch;
   }
-  void model_all(long num,float * in,float * out)
+  void model_all(long num,double * in,double * out)
   {
     for(long i=0;i<num;i++)
     {
@@ -1544,7 +2004,7 @@ struct mrbm_params
   long num_batch;
   long total_n;
   long n;
-  float epsilon;
+  double epsilon;
   long n_iter;
   long n_cd;
 
@@ -1561,7 +2021,7 @@ struct mrbm_params
 
   long bottleneck_iters;
 
-  mrbm_params(int _v,int _h,long n_iter,long n_batch,long n_samples,float c_epsilon)
+  mrbm_params(int _v,int _h,long n_iter,long n_batch,long n_samples,double c_epsilon)
   {
 
     v = _v;
@@ -1591,7 +2051,7 @@ struct mrbm_params
 
 mRBM * mrbm = NULL;
 
-void run_mrbm(mrbm_params p,float * dat_in,float * dat_out)
+void run_mrbm(mrbm_params p,double * dat_in,double * dat_out)
 {
   int cd = 0;
   for(int iter = 0; iter < 10; iter++)
@@ -1623,8 +2083,8 @@ void test_xor()
   nodes.push_back(3); // hidden layer
   nodes.push_back(1); // output layer
   nodes.push_back(1); // outputs
-  Perceptron<float> perceptron(nodes);
-  float in_dat[8];
+  Perceptron<double> perceptron(nodes);
+  double in_dat[8];
   in_dat[0] = 0;
   in_dat[1] = 0;
   in_dat[2] = 0;
@@ -1633,7 +2093,7 @@ void test_xor()
   in_dat[5] = 0;
   in_dat[6] = 1;
   in_dat[7] = 1;
-  float out_dat[4];
+  double out_dat[4];
   out_dat[0] = 0;
   out_dat[1] = 1;
   out_dat[2] = 1;
@@ -1651,7 +2111,7 @@ void test_spiral()
   nodes.push_back(10); // hidden layer
   nodes.push_back(1); // output layer
   nodes.push_back(1); // outputs
-  perceptron = new Perceptron<float>(nodes);
+  perceptron = new Perceptron<double>(nodes);
   perceptron->epsilon = .1;
   perceptron->sigmoid_type = 0;
   int num_pts = 100;
@@ -1661,12 +2121,12 @@ void test_spiral()
     std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
 
     int num_pts = 100;
-     in_dat = new float[num_pts*2];
-    out_dat = new float[num_pts];
-    float R;
+     in_dat = new double[num_pts*2];
+    out_dat = new double[num_pts];
+    double R;
     for(int pt=0;pt<num_pts;pt+=2)
     {
-      R = (float)pt/num_pts;
+      R = (double)pt/num_pts;
        in_dat[pt*2  ] =  R*cos(4*M_PI*R);
        in_dat[pt*2+1] =  R*sin(4*M_PI*R);
        in_dat[pt*2+2] = -R*cos(4*M_PI*R);
@@ -1693,7 +2153,7 @@ void test_func()
   nodes.push_back(150); // hidden layer
   nodes.push_back(1); // output layer
   nodes.push_back(1); // outputs
-  perceptron = new Perceptron<float>(nodes);
+  perceptron = new Perceptron<double>(nodes);
   perceptron->epsilon = .1;
   perceptron->sigmoid_type = 0;
   int num_pts = 100;
@@ -1701,16 +2161,16 @@ void test_func()
   while(true)
   {
     std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
-     in_dat = new float[num_pts*2];
-    out_dat = new float[num_pts];
-    float R;
+     in_dat = new double[num_pts*2];
+    out_dat = new double[num_pts];
+    double R;
     for(int pt=0;pt<num_pts;pt++)
     {
       in_dat[2*pt  ] = -1+2*((rand()%10000)/10000.0f);
       in_dat[2*pt+1] = -1+2*((rand()%10000)/10000.0f);
       //out_dat[pt] = (sqrt(in_dat[2*pt]*in_dat[2*pt] + in_dat[2*pt+1]*in_dat[2*pt+1]) < 0.9)?1:0;
-      std::complex<float> x(1.5*in_dat[2*pt],1.5*in_dat[2*pt+1]);
-      std::complex<float> c(0,0);
+      std::complex<double> x(1.5*in_dat[2*pt],1.5*in_dat[2*pt+1]);
+      std::complex<double> c(0,0);
       out_dat[pt] = 0;
       for(int iter = 0; iter < 1000; iter++)
       {
@@ -1738,8 +2198,8 @@ void test_boltzman()
   int num_inputs = 2;
   int num_outputs = 1;
   int num_elems = 4;
-  float * in  = new float[num_inputs *num_elems];
-  float * out = new float[num_outputs*num_elems];
+  double * in  = new double[num_inputs *num_elems];
+  double * out = new double[num_outputs*num_elems];
   in[0] = 0;
   in[1] = 0;
   in[2] = 0;
@@ -1771,7 +2231,7 @@ void test_boltzman()
   nodes.push_back(num_inputs+num_outputs); // hidden layer
   nodes.push_back(num_outputs); // output layer
   nodes.push_back(num_outputs); // outputs
-  perceptron = new Perceptron<float>(nodes);
+  perceptron = new Perceptron<double>(nodes);
   perceptron->epsilon = 0.01;
   perceptron->sigmoid_type = 0;
   
@@ -1828,7 +2288,7 @@ void test_boltzman()
   //
   //std::cout << '[' << nodes[layer+1] << '\t' << nodes[layer] << ']' << std::endl;
   //std::cout << '[' << mrbm->bottle_neck->v << '\t' << mrbm->bottle_neck->h << ']' << std::endl;
-  //void vis2hid_worker(const float * X,float * H,long h,long v,float * c,float * W,std::vector<long> const & vrtx)
+  //void vis2hid_worker(const double * X,double * H,long h,long v,double * c,double * W,std::vector<long> const & vrtx)
   //{
   //  for(long t=0;t<vrtx.size();t++)
   //  {
@@ -1979,8 +2439,8 @@ void test_boltzman()
   int num_outputs = 1;
   int num_hidden = 3;
   int num_elems = 4;
-  float * in  = new float[num_inputs *num_elems];
-  float * out = new float[num_outputs*num_elems];
+  double * in  = new double[num_inputs *num_elems];
+  double * out = new double[num_outputs*num_elems];
   in[0] = 0;
   in[1] = 0;
   in[2] = 0;
@@ -2000,7 +2460,7 @@ void test_boltzman()
     rbm->init(0);
     rbm->cd(1,0.1,0);
   }
-  float * hid = new float[num_hidden*num_elems];
+  double * hid = new double[num_hidden*num_elems];
   rbm->vis2hid(in,hid);
   RBM * rbm2 = new RBM(num_hidden,num_outputs,num_elems,hid);
   for(int i=0;i<10000;i++)
@@ -2015,7 +2475,7 @@ void test_boltzman()
   nodes.push_back(num_hidden); // hidden layer
   nodes.push_back(num_outputs); // output layer
   nodes.push_back(num_outputs); // outputs
-  perceptron = new Perceptron<float>(nodes);
+  perceptron = new Perceptron<double>(nodes);
   perceptron->epsilon = 0.1;
   perceptron->sigmoid_type = 0;
   
@@ -2135,175 +2595,156 @@ void test_boltzman()
 
 }
 
-void test_boltzman_mandelbrot()
+int min(int a,int b)
 {
-  int num_inputs = 2;
+    return (a>b)?b:a;
+}
+
+void test_boltzman_multilayer()
+{
+  int num_inputs  = (nx+ny);
   int num_outputs = 1;
-  int num_hidden = 3;
-  int num_elems = 4;
-  float * in  = new float[num_inputs *num_elems];
-  float * out = new float[num_outputs*num_elems];
-  in[0] = 0;
-  in[1] = 0;
-  in[2] = 0;
-  in[3] = 1;
-  in[4] = 1;
-  in[5] = 0;
-  in[6] = 1;
-  in[7] = 1;
-  out[0] = 0;
-  out[1] = 1;
-  out[2] = 1;
-  out[3] = 0;
-
-  RBM * rbm = new RBM(num_inputs,num_hidden,num_elems,in);
-  for(int i=0;i<10000;i++)
+  std::vector<int> num_hidden;
+  num_hidden.push_back((nx*ny));
+  num_hidden.push_back((nx*ny));
+  int num_elems = 10000;
+  int num_approx = 3;
+  int num_iters = 100;
+  double eps = 1.0;
+  double * in  = new double[num_inputs *num_elems];
+  double * out = new double[num_outputs*num_elems];
+  for(long x=0;x<num_elems;x++)
   {
-    rbm->init(0);
-    rbm->cd(1,0.1,0);
-  }
-  float * hid = new float[num_hidden*num_elems];
-  rbm->vis2hid(in,hid);
-  RBM * rbm2 = new RBM(num_hidden,num_outputs,num_elems,hid);
-  for(int i=0;i<10000;i++)
-  {
-    rbm2->init(0);
-    rbm2->cd(1,0.1,0);
+    double R;
+    double X = ((rand()%10000)/10000.0f);
+    double Y = ((rand()%10000)/10000.0f);
+    double dX = -1+2*X;
+    double dY = -1+2*Y;
+    int bX = pow(2,nx)*X;
+    int bY = pow(2,ny)*Y;
+    for(long i=0;i<nx;i++)
+    {
+      in[x*num_inputs+i] = bX%2==0;
+      bX/=2;
+    }
+    for(long i=nx;i<nx+ny;i++)
+    {
+      in[x*num_inputs+i] = bY%2==0;
+      bY/=2;
+    }
+    std::complex<double> y(1.5*dX,1.5*dY);
+    std::complex<double> c(0,0);
+    out[x] = 0;
+    for(int iter = 0; iter < 1000; iter++)
+    {
+      c = y + c*c;
+      if(norm(c)>3)
+      {
+        out[x] = 1;
+        break;
+      }
+    }
   }
 
-  long num_iters = 100000;
+  //std::vector < RBM * > rbm;
+  //{
+  //  std::cout << num_inputs << "->" << num_hidden[0] << std::endl;
+  //  std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
+  //  rbm.push_back(new RBM(num_inputs,num_hidden[0],num_elems,in));
+  //  for(int j=1;j<=num_approx;j++)
+  //  {
+  //    std::cout << j << "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$" << std::endl;
+  //    for(int i=0;i<num_iters;i++)
+  //    {
+  //      rbm[rbm.size()-1]->init(0);
+  //      rbm[rbm.size()-1]->cd(j,eps/j,0);
+  //    }
+  //  }
+  //  double ** hid = new double*[num_hidden.size()];
+  //  for(int i=0;i<num_hidden.size();i++)
+  //  {
+  //      hid[i] = new double[num_hidden[i]*num_elems];
+  //  }
+  //  rbm[rbm.size()-1]->vis2hid(in,hid[0]);
+  //  for(int i=0;i<num_hidden[0]*num_elems;i++)
+  //      hid[0][i] = (hid[0][i]>0.5)?1:0;
+  //  for(int i=0;i<3*num_hidden[0];i++)
+  //      std::cout << hid[0][i] << '\t';
+  //  std::cout << std::endl;
+  //  for(int l=0;l+1<num_hidden.size();l++)
+  //  {
+  //    std::cout << num_hidden[l] << "->" << num_hidden[l+1] << std::endl;
+  //    std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
+  //    rbm.push_back(new RBM(num_inputs,num_hidden[l],num_hidden[l+1],hid[l]));
+  //    for(int j=1;j<=num_approx;j++)
+  //    {
+  //      std::cout << j << "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$" << std::endl;
+  //      for(int i=0;i<num_iters;i++)
+  //      {
+  //        rbm[rbm.size()-1]->init(0);
+  //        rbm[rbm.size()-1]->cd(j,eps/j,0);
+  //      }
+  //    }
+  //    rbm[rbm.size()-1]->vis2hid(hid[l],hid[l+1]);
+  //    for(int i=0;i<num_hidden[l+1]*num_elems;i++)
+  //        hid[l+1][i] = (hid[l+1][i]>0.5)?1:0;
+  //    for(int i=0;i<3*num_hidden[l+1];i++)
+  //        std::cout << hid[l+1][i] << '\t';
+  //    std::cout << std::endl;
+  //  }
+  //  std::cout << num_hidden[num_hidden.size()-1] << "->" << num_outputs << std::endl;
+  //  std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
+  //  rbm.push_back(new RBM(num_hidden[num_hidden.size()-1],num_outputs,num_elems,hid[num_hidden.size()-1]));
+  //  for(int j=1;j<=num_approx;j++)
+  //  {
+  //    std::cout << j << "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$" << std::endl;
+  //    for(int i=0;i<num_iters;i++)
+  //    {
+  //      rbm[rbm.size()-1]->init(0);
+  //      rbm[rbm.size()-1]->cd(j,eps/j,0);
+  //    }
+  //  }
+  //}
+
+  long num_ann_iters = 100000;
   std::vector<long> nodes;
   nodes.push_back(num_inputs); // inputs
-  nodes.push_back(num_hidden); // hidden layer
+  for(int h=0;h<num_hidden.size();h++)
+    nodes.push_back(num_hidden[h]); // hidden layer
   nodes.push_back(num_outputs); // output layer
   nodes.push_back(num_outputs); // outputs
-  perceptron = new Perceptron<float>(nodes);
+  perceptron = new Perceptron<double>(nodes);
   perceptron->epsilon = 0.1;
   perceptron->sigmoid_type = 0;
   
-  int layer = 0;
-  {
-    {
-      for(int i=0;i<nodes[layer+1];i++)
-      {
-        for(int j=0;j<nodes[layer];j++)
-        {
-          perceptron->weights_neuron[layer][i][j] = rbm->W[j*rbm->h+i];
-        }
-        perceptron->weights_bias[layer][i] = rbm->c[i];
-      }
-    }
-    layer++;
-  }
+  //int layer = 0;
+  //for(int l=0;l+1<rbm.size();l++)
   //{
   //  {
   //    for(int i=0;i<nodes[layer+1];i++)
   //    {
   //      for(int j=0;j<nodes[layer];j++)
   //      {
-  //        perceptron->weights_neuron[layer][i][j] = rbm2->W[j*rbm2->h+i];
+  //        perceptron->weights_neuron[layer][i][j] = rbm[l]->W[j*rbm[l]->h+i];
   //      }
-  //      perceptron->weights_bias[layer][i] = rbm2->c[i];
+  //      perceptron->weights_bias[layer][i] = rbm[l]->c[i];
   //    }
   //  }
   //  layer++;
   //}
 
-  if(rbm != NULL)
-  {
-    {
-      {
-        rbm->print();
-      }
-    }
-  }
-  if(rbm2 != NULL)
-  {
-    {
-      {
-        rbm2->print();
-      }
-    }
-  }
-  
-  if(perceptron != NULL)
-  {
-    std::cout << "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" << std::endl;
-    for(long layer = 0;layer < nodes.size()-2;layer++)
-    {
-      std::cout << "W:" << std::endl;
-      for(long i=0;i<nodes[layer+1];i++)
-      {
-        for(long j=0;j<nodes[layer];j++)
-        {
-          std::cout << perceptron->weights_neuron[layer][i][j] << '\t';
-        }
-        std::cout << '\n';
-      }
-      std::cout << '\n';
-      std::cout << "b:" << std::endl;
-      for(long i=0;i<nodes[layer+1];i++)
-      {
-        std::cout << perceptron->weights_bias[layer][i] << '\t';
-      }
-      std::cout << '\n';
-    }
-  }
-  char ch;
-  std::cin >> ch;
-
-  perceptron->train(perceptron->sigmoid_type,perceptron->epsilon,num_iters,num_elems,num_inputs,in,num_outputs,out);
-
-  if(rbm != NULL)
-  {
-    {
-      {
-        rbm->print();
-      }
-    }
-  }
-  if(rbm2 != NULL)
-  {
-    {
-      {
-        rbm2->print();
-      }
-    }
-  }
-  
-  if(perceptron != NULL)
-  {
-    std::cout << "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" << std::endl;
-    for(long layer = 0;layer < nodes.size()-2;layer++)
-    {
-      std::cout << "W:" << std::endl;
-      for(long i=0;i<nodes[layer+1];i++)
-      {
-        for(long j=0;j<nodes[layer];j++)
-        {
-          std::cout << perceptron->weights_neuron[layer][i][j] << '\t';
-        }
-        std::cout << '\n';
-      }
-      std::cout << '\n';
-      std::cout << "b:" << std::endl;
-      for(long i=0;i<nodes[layer+1];i++)
-      {
-        std::cout << perceptron->weights_bias[layer][i] << '\t';
-      }
-      std::cout << '\n';
-    }
-  }
+  perceptron->train(perceptron->sigmoid_type,perceptron->epsilon,num_ann_iters,num_elems,num_inputs,in,num_outputs,out);
 
 }
 
 int main(int argc,char ** argv)
 {
+  srand(time(NULL));
   //test_xor();
   //boost::thread * th = new boost::thread(test_spiral);
   //boost::thread * th = new boost::thread(test_func);
   //boost::thread * th = new boost::thread(test_boltzman);
-  boost::thread * th = new boost::thread(test_boltzman_mandelbrot);
+  boost::thread * th = new boost::thread(test_boltzman_multilayer);
   glutInit(&argc, argv);
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
   glutCreateWindow("multi-layer nn tests");
