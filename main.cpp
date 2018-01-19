@@ -61,6 +61,33 @@ T max(T a,T b)
     return (a>b)?a:b;
 }
 
+template < typename T >
+void apply_worker(std::vector<long> const & indices,long size,T * y,T * W,T * x)
+{
+  for(long k=0;k<indices.size();k++)
+  {
+    long i = indices[k];
+    y[i] = 0;
+    for(long j=0;j<size;j++)
+    {
+      y[i] += W[i*size+j]*x[j];
+    }
+  }
+}
+
+template < typename T >
+void outer_product_worker(std::vector<long> const & indices,long size,T * H,T * A,T * B,T fact)
+{
+  for(long k=0;k<indices.size();k++)
+  {
+    long i = indices[k];
+    for(long j=0;j<size;j++)
+    {
+      H[i*size+j] += A[i] * B[j] * fact;
+    }
+  }
+}
+
 template<typename T>
 struct quasi_newton_info
 {
@@ -103,6 +130,14 @@ struct quasi_newton_info
         for(long k=0;k<size;k++)
         {
             dst[k] = src[k];
+        }
+    }
+
+    void copy_avg (T * src,T * dst,T alph,long size)
+    {
+        for(long k=0;k<size;k++)
+        {
+            dst[k] += (src[k]-dst[k])*alph;
         }
     }
 
@@ -197,7 +232,7 @@ struct quasi_newton_info
     void update_QuasiNewton()
     {
         long size = get_size();
-        copy(grad_2,grad_1,size);
+        copy_avg(grad_2,grad_1,0.1,size);
         copy(grad_tmp,grad_2,size);
         T * Y_tmp = get_y();
         copy(Y_tmp,Y,size);
@@ -211,20 +246,19 @@ struct quasi_newton_info
     {
         long size = get_size();
         T * y = new T[size];
-        T y_m = 0;
+        //T y_m = 0;
         for(long k=0;k<size;k++)
         {
             y[k] = grad_2[k] - grad_1[k];
-            y_m = max(y_m,fabs(y[k]));
+            //y_m = max(y_m,fabs(y[k]));
         }
-        std::cout << "y:" << y_m << std::endl;
         return y;
     }
 
     T * get_dx ()
     {
         long size = get_size();
-        T * dx = apply(H,grad_2);
+        T * dx = apply(H,grad_1);
         for(long k=0;k<size;k++)
         {
             dx[k] *= -alpha;
@@ -255,7 +289,7 @@ struct quasi_newton_info
         {
             ret += a[i]*b[i];
         }
-        T eps = 1e-4;
+        T eps = 1e-3;
         if(ret<0)
         {
             ret -= eps;
@@ -271,13 +305,21 @@ struct quasi_newton_info
     {
         long size = get_size();
         T * y = new T[size];
-        for(long i=0,k=0;i<size;i++)
+        std::vector<boost::thread * > threads;
+        long num_cpu = boost::thread::hardware_concurrency();
+        std::vector<std::vector<long> > indices(num_cpu);
+        for(long i=0;i<size;i++)
         {
-          y[i] = 0;
-          for(long j=0;j<size;j++,k++)
-          {
-            y[i] += W[k]*x[j];
-          }
+          indices[i%num_cpu].push_back(i);
+        }
+        for(long i=0;i<num_cpu;i++)
+        {
+          threads.push_back(new boost::thread(apply_worker<T>,indices[i],size,&y[0],&W[0],&x[0]));
+        }
+        for(long i=0;i<threads.size();i++)
+        {
+          threads[i]->join();
+          delete threads[i];
         }
         return y;
     }
@@ -313,40 +355,35 @@ struct quasi_newton_info
     // SR1
     void SR1_update()
     {
-        update_QuasiNewton();
         long size = get_size();
         T * dx_Hy = apply(H,Y);
         for(long i=0;i<size;i++)
         {
           dx_Hy[i] = dX[i] - dx_Hy[i];
         }
-        T * outer = get_outer_product(dx_Hy,dx_Hy);
-        T inner = -1.0 / (get_inner_product(dx_Hy,Y));
-        std::cout << "inner:" << inner << std::endl;
-        T eps = 1;
-        T eps2 = 100;
-        for(long i=0,k=0;i<size;i++)
+        T inner = 1.0 / (get_inner_product(dx_Hy,Y));
+        std::vector<boost::thread * > threads;
+        long num_cpu = boost::thread::hardware_concurrency();
+        std::vector<std::vector<long> > indices(num_cpu);
+        for(long i=0;i<size;i++)
         {
-          for(long j=0;j<size;j++,k++)
-          {
-            if(i==j)
-            {
-              H[k] += limit(eps * outer[k] * inner,eps2);
-            }
-            else
-            {
-              H[k] += limit(eps * outer[k] * inner,eps2);
-            }
-          }
+          indices[i%num_cpu].push_back(i);
+        }
+        for(long i=0;i<num_cpu;i++)
+        {
+          threads.push_back(new boost::thread(outer_product_worker<T>,indices[i],size,&H[0],&dx_Hy[0],&dx_Hy[0],inner));
+        }
+        for(long i=0;i<threads.size();i++)
+        {
+          threads[i]->join();
+          delete threads[i];
         }
         delete [] dx_Hy;
-        delete [] outer;
     }
 
     // Broyden
     void Broyden_update()
     {
-        update_QuasiNewton();
         long size = get_size();
         T * dx_Hy = apply(H,Y);
         for(long i=0;i<size;i++)
@@ -368,7 +405,6 @@ struct quasi_newton_info
     // DFP
     void DFP_update()
     {
-        update_QuasiNewton();
         long size = get_size();
         T * Hy = apply(H,Y);
         T * outer_2 = get_outer_product(Hy,Hy);
@@ -405,7 +441,6 @@ struct quasi_newton_info
     // BFGS
     void BFGS_update()
     {
-        update_QuasiNewton();
         long size = get_size();
         T inner = 1.0 / (get_inner_product(Y,dX));
         T * outer_xx = get_outer_product(dX,dX);
@@ -558,7 +593,6 @@ struct training_info
     {
         if(quasi_newton->quasi_newton_update)
         {
-            quasi_newton->SR1_update();
             for(long layer = 0,k = 0;layer < n_layers;layer++)
             {
                 for(long i=0;i<n_nodes[layer+1];i++)
@@ -861,6 +895,8 @@ struct Perceptron
               g[thread]->update_gradient();
               delete threads[thread];
             }
+            quasi_newton->update_QuasiNewton();
+            quasi_newton->SR1_update();
             for(long thread=0;thread<vrtx.size();thread++)
             {
               g[thread]->globalUpdate();
@@ -873,7 +909,7 @@ struct Perceptron
             g.clear();
 
             static int cnt1 = 0;
-            //if(cnt1%100==0)
+            if(cnt1%10==0)
             std::cout << "quasi_newton_update=" << quasi_newton->quasi_newton_update << "\ttype=" << sigmoid_type << "\tepsilon=" << epsilon << "\talpha=" << alpha << '\t' << "error=" << error << "\tdiff=" << (error-perror) << std::endl;
             cnt1++;
             perror = error;
@@ -896,7 +932,7 @@ double * out_dat = NULL;
 
 Perceptron<double> * perceptron = NULL;
 
-int nx = 5, ny = 5;
+int nx = 7, ny = 7;
 void
 drawStuff(void)
 {
@@ -987,8 +1023,8 @@ void keyboard(unsigned char key,int x,int y)
     case 27:exit(1);break;
     case 'w':perceptron->epsilon *= 1.1; break;
     case 's':perceptron->epsilon /= 1.1; break;
-    case 'r':perceptron->alpha *= 1.1; break;
-    case 'f':perceptron->alpha /= 1.1; break;
+    case 'r':perceptron->alpha *= 1.1;perceptron->quasi_newton->alpha = perceptron->alpha; break;
+    case 'f':perceptron->alpha /= 1.1;perceptron->quasi_newton->alpha = perceptron->alpha; break;
     case 'a':perceptron->sigmoid_type = (perceptron->sigmoid_type+1)%2; break;
     case 'd':perceptron->sigmoid_type = (perceptron->sigmoid_type+1)%2; break;
     case 'z':if(perceptron->quasi_newton!=NULL){perceptron->quasi_newton->quasi_newton_update=!perceptron->quasi_newton->quasi_newton_update;}break;
@@ -1308,7 +1344,7 @@ struct RBM
     //for(int t=2;t<3&&t<errs.size();t++)
     //  *err += (errs[errs.size()+1-t]-*err)/t;
     static int cnt2 = 0;
-    //if(cnt2%10==0)
+    if(cnt2%10==0)
     std::cout << "Boltzmann error:" << *err << std::endl;
     cnt2++;
     //errs.push_back(*err);
@@ -2618,6 +2654,8 @@ void test_boltzman_multilayer()
   std::vector<int> num_hidden;
   num_hidden.push_back((nx*ny));
   num_hidden.push_back((nx*ny));
+  num_hidden.push_back((nx*ny));
+  num_hidden.push_back((nx*ny));
   int num_elems = 10000;
   int num_approx = 3;
   int num_iters = 100;
@@ -2726,6 +2764,7 @@ void test_boltzman_multilayer()
   nodes.push_back(num_outputs); // outputs
   perceptron = new Perceptron<double>(nodes);
   perceptron->epsilon = 0.1;
+  perceptron->alpha = 0.1;
   perceptron->sigmoid_type = 0;
   
   //int layer = 0;
